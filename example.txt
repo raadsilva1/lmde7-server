@@ -1,0 +1,1 @@
+ROOT_PASSWORD='123' USER_PASSWORD='123' ./install-lmde7.sh -d /dev/nvme0n1 -H abc -u abc -y
