@@ -693,8 +693,13 @@ EOF
   log "Initial apt update (expect one NO_PUBKEY warning for Mint)..."
   retry_apt apt-get update -o Acquire::AllowInsecureRepositories=true \
                           -o Acquire::AllowDowngradeToInsecureRepositories=true || true
-  log "Installing linuxmint-keyring from Debian..."
-  retry_apt apt-get install -y --no-install-recommends linuxmint-keyring
+
+  # The Mint repository cannot be verified until its keyring package is
+  # installed. Keep the unauthenticated bootstrap tightly scoped to that single
+  # package, then require the normal signed apt update below to pass.
+  log "Bootstrapping linuxmint-keyring from Mint repo..."
+  retry_apt apt-get -o APT::Get::AllowUnauthenticated=true \
+                    install -y --no-install-recommends linuxmint-keyring
 fi
 
 log "Final apt update..."
