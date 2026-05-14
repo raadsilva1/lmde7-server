@@ -662,6 +662,50 @@ retry_apt() {
   done
 }
 
+apt_package_available() {
+  # Return success only when APT has a real install candidate for the package.
+  # This avoids retrying packages that are simply not published for this LMDE
+  # release yet, while still failing normally on network or install errors.
+  local pkg=$1 candidate
+  candidate=$(apt-cache policy "$pkg" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')
+  [[ -n "$candidate" && "$candidate" != "(none)" ]]
+}
+
+install_available_packages() {
+  # Usage: install_available_packages required|optional pkg...
+  # required: fail if none of the requested packages are available or install fails.
+  # optional: warn and continue when packages are missing or fail to install.
+  local mode=$1; shift
+  local available=() missing=() pkg
+
+  for pkg in "$@"; do
+    if apt_package_available "$pkg"; then
+      available+=("$pkg")
+    else
+      missing+=("$pkg")
+    fi
+  done
+
+  if (( ${#missing[@]} )); then
+    warn "Skipping unavailable packages: ${missing[*]}"
+  fi
+
+  if (( ${#available[@]} )); then
+    if retry_apt apt-get install -y --no-install-recommends "${available[@]}"; then
+      return 0
+    fi
+    if [[ "$mode" == "optional" ]]; then
+      warn "Optional package install failed: ${available[*]}"
+      return 0
+    fi
+    return 1
+  fi
+
+  [[ "$mode" == "optional" ]] && return 0
+  err "None of the requested packages are available: $*"
+  return 1
+}
+
 # ── Section 1: Clean up LXC container artifacts ──────────────────────────────
 step "Cleaning container-isms"
 # Some minimal/LXC rootfs builds omit legacy config directories entirely.
@@ -718,6 +762,7 @@ BASE_PKGS=(
   locales console-setup keyboard-configuration
   bash-completion htop rsync git
   cron logrotate
+  e2fsprogs zstd
 )
 
 if [[ "$INSTALL_FIRMWARE" == "yes" ]]; then
@@ -741,10 +786,19 @@ ok "Base system installed"
 # ── Section 4: LMDE identity packages (no GUI) ───────────────────────────────
 if [[ "$LAYER_LMDE" == "yes" ]]; then
   step "Layering LMDE identity"
-  retry_apt apt-get install -y --no-install-recommends \
-    mint-common mint-mirrors mintsystem mintupdate-cli || \
-    warn "Some mint-* packages unavailable; system will still work"
-  ok "LMDE layer applied"
+
+  # Keep LMDE layering best-effort and granular. Package availability can vary
+  # while a new LMDE release settles; for example mintupdate-cli may not be
+  # published for every release/channel even when the core Mint identity
+  # packages are available. Install what exists and skip only missing packages.
+  install_available_packages optional \
+    mint-common mint-mirrors mintsystem mintupdate-cli
+
+  if [[ -f /etc/linuxmint/info ]]; then
+    ok "LMDE layer applied"
+  else
+    warn "LMDE identity packages were not installed; continuing with Debian base"
+  fi
 fi
 
 # ── Section 5: fstab ─────────────────────────────────────────────────────────
